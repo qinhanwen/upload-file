@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <script src="http://apps.bdimg.com/libs/jquery/2.1.4/jquery.min.js"></script>
+    <script src="https://cdn.bootcss.com/spark-md5/3.0.0/spark-md5.min.js"></script>
+    <title>HTML5 文件分段上传</title>
+</head>
+
+<body>
+    <form class="form-inline" role="form">
+        <input type="file" id="fileinput">
+        <a id="submit">SUBMIT</a>
+    </form>
+    <script>
+        let baseUrl = 'http://localhost:3000';
+        let chunkSize = 1 * 1024 * 1024
+        let fileSize = 0
+        let file = null
+        let chunks = 0
+        //点击submit开始上传
+        $("body").on("click", "#submit", function () {
+            let files = document.querySelector("#fileinput").files;
+            if (!files.length) {
+                alert("当前没有选择文件");
+                return false;
+            }
+            file = files[0];
+            fileSize = file.size;
+            startUpload(file);
+        })
+
+        async function startUpload(file) {
+            //生成文件MD5 等下文件上传完成后的唯一标识，为了做合并使用的
+            let fileMd5Value = await md5File(file);
+            //得到上传chunk分块长度
+            chunks = Math.ceil(fileSize / chunkSize);
+            for (let i = 0; i < chunks; i++) {
+                //上传chunk
+                await uploadChunk(i, fileMd5Value, chunks);
+            }
+            // 上传完成后，提交合并分文件请求
+            mergeChunk(fileMd5Value);
+        }
+
+        //生成文件MD5
+        function md5File(file) {
+            return new Promise((resolve, reject) => {
+                var blobSlice = File.prototype.slice || File.prototype.webkitSlice || File.prototype.mozSlice,
+                    chunkSize = file.size / 100,
+                    chunks = 100,
+                    currentChunk = 0,
+                    spark = new SparkMD5.ArrayBuffer(),
+                    fileReader = new FileReader();
+                fileReader.onload = function (e) {
+                    spark.append(this.result);
+                    currentChunk++;
+                    if (currentChunk < chunks) {
+                        loadNext();
+                    } else {
+                        resolve(spark.end());
+                    }
+                }
+
+                function loadNext() {
+                    let start = currentChunk * chunkSize,
+                        end = ((start + chunkSize) >= file.size) ? file.size : (start + chunkSize);
+                    fileReader.readAsArrayBuffer(blobSlice.apply(file, [start, end]));
+                }
+                loadNext();
+            })
+        }
+
+        // 上传分块
+        function uploadChunk(i, fileMd5Value, chunks) {
+            return new Promise((resolve, reject) => {
+                let end = (i + 1) * chunkSize >= file.size ? file.size : (i + 1) * chunkSize;
+                // 构建一个formdata
+                let form = new FormData()
+                form.append("data", file.slice(i * chunkSize, end));
+                form.append("totalChunks", chunks);
+                form.append("currChunk", i);
+                form.append("fileMd5Value", fileMd5Value);
+
+                let url = `${baseUrl}/upload`;
+                $.ajax({
+                    url: url,
+                    type: "post",
+                    data: form,
+                    async: true,
+                    processData: false,
+                    contentType: false,
+                    success: function (data) {
+                        console.log(data);
+                        resolve(data);
+                    }
+                })
+            })
+        }
+
+        //5. 合并分块
+        function mergeChunk(fileMd5Value) {
+            let url = `${baseUrl}/mergeChunk?md5=${fileMd5Value}&fileName=${file.name}&size=${file.size}`;
+            $.get(url, function (data) {
+                alert('上传成功');
+            })
+        }
+    </script>
+</body>
+
+</html>
